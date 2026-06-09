@@ -3,7 +3,7 @@ import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
-export async function query<T>(sql: string): Promise<T[]> {
+export async function query<T>(sql: string, retries = 3): Promise<T[]> {
   try {
     // Escape single quotes in the SQL string
     const escapedSql = sql.replace(/'/g, "'\\''");
@@ -21,7 +21,12 @@ export async function query<T>(sql: string): Promise<T[]> {
       console.error('Failed to parse team-db output:', stdout);
       throw parseError;
     }
-  } catch (error) {
+  } catch (error: any) {
+    if (retries > 0 && error.message.includes('Locking error')) {
+      console.log(`Locking error, retrying... (${retries} left)`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      return query(sql, retries - 1);
+    }
     console.error('Database query error:', error);
     throw error;
   }
