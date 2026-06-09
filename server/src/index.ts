@@ -162,6 +162,155 @@ app.get('/api/videos/random', async (req: Request, res: Response) => {
   }
 });
 
+// --- Activity Routes ---
+app.post('/api/activities', async (req: Request, res: Response) => {
+  const { user_id, activity_type, duration_minutes } = req.body;
+  try {
+    await db.execute(`INSERT INTO activity_logs (user_id, activity_type, duration_minutes) VALUES (${user_id}, '${activity_type}', ${duration_minutes || 0})`);
+    res.status(201).json({ message: 'Activity logged' });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get('/api/activities/:userId', async (req: Request, res: Response) => {
+  try {
+    const logs = await db.query<any>(`SELECT * FROM activity_logs WHERE user_id = ${req.params.userId} ORDER BY created_at DESC`);
+    res.json(logs);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- Challenges Routes ---
+app.get('/api/challenges', async (req: Request, res: Response) => {
+  try {
+    const challenges = await db.query<any>('SELECT * FROM challenges');
+    res.json(challenges);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/challenges/:id/join', async (req: Request, res: Response) => {
+  const { user_id } = req.body;
+  const challengeId = req.params.id;
+  try {
+    await db.execute(`INSERT INTO user_challenges (user_id, challenge_id, status, progress) VALUES (${user_id}, ${challengeId}, 'active', 0)`);
+    res.status(201).json({ message: 'Joined challenge' });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get('/api/challenges/user/:userId', async (req: Request, res: Response) => {
+  try {
+    const challenges = await db.query<any>(`
+      SELECT c.*, uc.progress, uc.status, uc.completed_at
+      FROM challenges c
+      JOIN user_challenges uc ON c.id = uc.challenge_id
+      WHERE uc.user_id = ${req.params.userId}
+    `);
+    res.json(challenges);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/challenges/:id/update', async (req: Request, res: Response) => {
+  const { user_id, progress, completed } = req.body;
+  const challengeId = req.params.id;
+  try {
+    let sql = `UPDATE user_challenges SET progress = ${progress}`;
+    if (completed) {
+      sql += `, status = 'completed', completed_at = CURRENT_TIMESTAMP`;
+    }
+    sql += ` WHERE user_id = ${user_id} AND challenge_id = ${challengeId}`;
+    await db.execute(sql);
+    res.json({ message: 'Progress updated' });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get('/api/challenges/:id/leaderboard', async (req: Request, res: Response) => {
+  const challengeId = req.params.id;
+  try {
+    const leaderboard = await db.query<any>(`
+      SELECT u.username, uc.progress, uc.status, uc.completed_at
+      FROM user_challenges uc
+      JOIN users u ON uc.user_id = u.id
+      WHERE uc.challenge_id = ${challengeId}
+      ORDER BY uc.progress DESC
+      LIMIT 10
+    `);
+    res.json(leaderboard);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- Community & Social Routes ---
+app.get('/api/community/feed', async (req: Request, res: Response) => {
+  try {
+    const feed = await db.query<any>(`
+      SELECT al.*, u.username, 
+             (SELECT COUNT(*) FROM activity_likes WHERE activity_id = al.id) as likes_count
+      FROM activity_logs al
+      JOIN users u ON al.user_id = u.id
+      ORDER BY al.created_at DESC
+      LIMIT 20
+    `);
+    res.json(feed);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/activities/:id/like', async (req: Request, res: Response) => {
+  const { user_id } = req.body;
+  const activityId = req.params.id;
+  try {
+    await db.execute(`INSERT INTO activity_likes (activity_id, user_id) VALUES (${activityId}, ${user_id})`);
+    res.json({ message: 'Activity liked' });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/users/:id/follow', async (req: Request, res: Response) => {
+  const { follower_id } = req.body;
+  const followedId = req.params.id;
+  try {
+    await db.execute(`INSERT INTO follows (follower_id, followed_id) VALUES (${follower_id}, ${followedId})`);
+    res.json({ message: 'User followed' });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get('/api/users/:id/profile', async (req: Request, res: Response) => {
+  const userId = req.params.id;
+  try {
+    const user = await db.query<any>(`SELECT id, username, email, created_at FROM users WHERE id = ${userId}`);
+    if (user.length === 0) return res.status(404).json({ error: 'User not found' });
+    
+    const streaks = await db.query<any>(`SELECT current_streak, longest_streak FROM streaks WHERE user_id = ${userId}`);
+    const activities = await db.query<any>(`SELECT SUM(duration_minutes) as total_minutes FROM activity_logs WHERE user_id = ${userId}`);
+    
+    res.json({
+      ...user[0],
+      stats: {
+        current_streak: streaks[0]?.current_streak || 0,
+        longest_streak: streaks[0]?.longest_streak || 0,
+        total_motivation_minutes: activities[0]?.total_minutes || 0
+      }
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
 });
